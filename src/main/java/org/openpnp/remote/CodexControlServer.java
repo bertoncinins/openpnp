@@ -23,6 +23,8 @@ import javax.imageio.ImageIO;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.Length;
 import org.openpnp.model.Location;
+import org.openpnp.machine.reference.camera.OpenPnpCaptureCamera;
+import org.openpnp.machine.reference.camera.OpenPnpCaptureCamera.CapturePropertyHolder;
 import org.openpnp.spi.Actuator;
 import org.openpnp.spi.Camera;
 import org.openpnp.spi.Head;
@@ -127,6 +129,14 @@ public class CodexControlServer implements AutoCloseable {
         switch (command) {
             case "machine.status":
                 return buildStatus();
+            case "config.save":
+                return waitForMachineTask(() -> {
+                    Configuration.get().save();
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("saved", true);
+                    result.put("configDir", Configuration.get().getConfigurationDirectory().getAbsolutePath());
+                    return result;
+                }, true);
             case "machine.enable":
                 return waitForMachineTask(() -> {
                     boolean enabled = requireBoolean(request.enabled, "Missing enabled=true/false.");
@@ -190,6 +200,29 @@ public class CodexControlServer implements AutoCloseable {
                     result.put("height", image.getHeight());
                     return result;
                 }, false);
+            case "camera.properties":
+                return waitForMachineTask(() -> cameraPropertiesInfo(findCaptureCamera(request.camera)), true);
+            case "camera.property.set":
+                return waitForMachineTask(() -> {
+                    OpenPnpCaptureCamera camera = findCaptureCamera(request.camera);
+                    CapturePropertyHolder holder = findCameraProperty(camera, request.property);
+                    if (request.auto == null && request.propertyValue == null) {
+                        throw new IllegalArgumentException("Missing property value and/or auto flag.");
+                    }
+                    if (request.auto != null) {
+                        if (!holder.isAutoSupported()) {
+                            throw new IllegalArgumentException("Property " + request.property + " does not support auto mode.");
+                        }
+                        holder.setAuto(request.auto.booleanValue());
+                    }
+                    if (request.propertyValue != null) {
+                        holder.setValue(request.propertyValue.intValue());
+                    }
+                    if (Boolean.TRUE.equals(request.save)) {
+                        Configuration.get().save();
+                    }
+                    return singleCameraPropertyInfo(request.property, holder);
+                }, false);
             default:
                 throw new IllegalArgumentException("Unsupported command: " + request.command);
         }
@@ -234,6 +267,15 @@ public class CodexControlServer implements AutoCloseable {
             }
         }
         throw new IllegalArgumentException("Unknown camera: " + cameraName);
+    }
+
+    private OpenPnpCaptureCamera findCaptureCamera(String cameraName) throws Exception {
+        Camera camera = findCamera(cameraName);
+        if (!(camera instanceof OpenPnpCaptureCamera)) {
+            throw new IllegalArgumentException(
+                    "Camera " + camera.getName() + " does not support OpenPnP capture properties.");
+        }
+        return (OpenPnpCaptureCamera) camera;
     }
 
     private Actuator findActuator(String actuatorName) {
@@ -344,6 +386,88 @@ public class CodexControlServer implements AutoCloseable {
         File captureDir = new File(Configuration.get().getConfigurationDirectory(), "codex-captures");
         String safeCameraName = cameraName.replaceAll("[^A-Za-z0-9._-]", "_");
         return new File(captureDir, safeCameraName + "-" + System.currentTimeMillis() + ".png");
+    }
+
+    private Map<String, Object> cameraPropertiesInfo(OpenPnpCaptureCamera camera) {
+        Map<String, Object> info = cameraInfo(camera);
+        info.put("freezeProperties", camera.isFreezeProperties());
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("back-light-compensation", singleCameraPropertyInfo("back-light-compensation",
+                camera.getBackLightCompensation()));
+        properties.put("brightness", singleCameraPropertyInfo("brightness", camera.getBrightness()));
+        properties.put("contrast", singleCameraPropertyInfo("contrast", camera.getContrast()));
+        properties.put("exposure", singleCameraPropertyInfo("exposure", camera.getExposure()));
+        properties.put("focus", singleCameraPropertyInfo("focus", camera.getFocus()));
+        properties.put("gain", singleCameraPropertyInfo("gain", camera.getGain()));
+        properties.put("gamma", singleCameraPropertyInfo("gamma", camera.getGamma()));
+        properties.put("hue", singleCameraPropertyInfo("hue", camera.getHue()));
+        properties.put("power-line-frequency",
+                singleCameraPropertyInfo("power-line-frequency", camera.getPowerLineFrequency()));
+        properties.put("saturation", singleCameraPropertyInfo("saturation", camera.getSaturation()));
+        properties.put("sharpness", singleCameraPropertyInfo("sharpness", camera.getSharpness()));
+        properties.put("white-balance", singleCameraPropertyInfo("white-balance", camera.getWhiteBalance()));
+        properties.put("zoom", singleCameraPropertyInfo("zoom", camera.getZoom()));
+        info.put("properties", properties);
+        return info;
+    }
+
+    private CapturePropertyHolder findCameraProperty(OpenPnpCaptureCamera camera, String propertyName) {
+        String normalized = normalizePropertyName(propertyName);
+        switch (normalized) {
+            case "back-light-compensation":
+                return camera.getBackLightCompensation();
+            case "brightness":
+                return camera.getBrightness();
+            case "contrast":
+                return camera.getContrast();
+            case "exposure":
+                return camera.getExposure();
+            case "focus":
+                return camera.getFocus();
+            case "gain":
+                return camera.getGain();
+            case "gamma":
+                return camera.getGamma();
+            case "hue":
+                return camera.getHue();
+            case "power-line-frequency":
+                return camera.getPowerLineFrequency();
+            case "saturation":
+                return camera.getSaturation();
+            case "sharpness":
+                return camera.getSharpness();
+            case "white-balance":
+                return camera.getWhiteBalance();
+            case "zoom":
+                return camera.getZoom();
+            default:
+                throw new IllegalArgumentException("Unsupported camera property: " + propertyName);
+        }
+    }
+
+    private String normalizePropertyName(String propertyName) {
+        if (propertyName == null || propertyName.trim().isEmpty()) {
+            throw new IllegalArgumentException("Missing camera property name.");
+        }
+        return propertyName.trim().toLowerCase(Locale.ROOT).replace('_', '-').replace(' ', '-');
+    }
+
+    private Map<String, Object> singleCameraPropertyInfo(String propertyName, CapturePropertyHolder holder) {
+        Map<String, Object> info = new LinkedHashMap<>();
+        info.put("name", normalizePropertyName(propertyName));
+        info.put("supported", holder.isSupported());
+        info.put("autoSupported", holder.isAutoSupported());
+        if (holder.isSupported()) {
+            info.put("min", holder.getMin());
+            info.put("max", holder.getMax());
+            info.put("default", holder.getDefault());
+            info.put("value", holder.getValue());
+            if (holder.isAutoSupported()) {
+                info.put("auto", holder.isAuto());
+            }
+        }
+        return info;
     }
 
     private Map<String, Object> buildStatus() {
@@ -460,6 +584,7 @@ public class CodexControlServer implements AutoCloseable {
         String camera;
         String head;
         String fiducial;
+        String property;
         String name;
         String path;
         Double x;
@@ -468,6 +593,9 @@ public class CodexControlServer implements AutoCloseable {
         Double rotation;
         Boolean enabled;
         Boolean light;
+        Boolean auto;
+        Boolean save;
+        Integer propertyValue;
         JsonElement value;
     }
 }
