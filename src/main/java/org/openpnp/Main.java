@@ -33,6 +33,7 @@ import org.openpnp.gui.components.ThemeSettingsPanel;
 import org.openpnp.logging.ConsoleWriter;
 import org.openpnp.logging.SystemLogger;
 import org.openpnp.model.Configuration;
+import org.openpnp.remote.CodexControlServer;
 import org.pmw.tinylog.Configurator;
 import org.pmw.tinylog.Level;
 import org.pmw.tinylog.Logger;
@@ -52,6 +53,7 @@ import javassist.NotFoundException;
  *
  */
 public class Main {
+    private static CodexControlServer codexControlServer;
 
     public static String getVersion() {
         return getVersionString()+"_"+getBuildString();
@@ -197,6 +199,10 @@ public class Main {
                     frame.setVisible(true);
                     Logger.info(String.format("Bienvenue, Bienvenido, Willkommen, Hello, Namaskar, Welkom, Bonjour to OpenPnP version %s.", Main.getVersion()));
                     configuration.getScripting().on("Startup", null);
+                    codexControlServer = CodexControlServer.createFromSystemProperties();
+                    if (codexControlServer != null) {
+                        codexControlServer.start();
+                    }
                 }
                 catch (Exception e) {
                     e.printStackTrace();
