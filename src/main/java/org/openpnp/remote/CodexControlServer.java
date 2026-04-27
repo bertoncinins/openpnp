@@ -30,6 +30,7 @@ import org.openpnp.spi.Camera;
 import org.openpnp.spi.Head;
 import org.openpnp.spi.Machine;
 import org.openpnp.spi.MotionPlanner.CompletionType;
+import org.openpnp.spi.Nozzle;
 import org.openpnp.spi.base.AbstractHead;
 import org.openpnp.util.MovableUtils;
 import org.pmw.tinylog.Logger;
@@ -157,6 +158,28 @@ public class CodexControlServer implements AutoCloseable {
                     head.getMachine().getMotionPlanner().waitForCompletion(null, CompletionType.WaitForStillstand);
                     return headInfo(head);
                 }, false);
+            case "nozzle.safez":
+                return waitForMachineTask(() -> {
+                    Nozzle nozzle = findNozzle(request.nozzle, request.head);
+                    nozzle.moveToSafeZ();
+                    nozzle.waitForCompletion(CompletionType.WaitForStillstand);
+                    MovableUtils.fireTargetedUserAction(nozzle);
+                    return nozzleInfo(nozzle);
+                }, false);
+            case "nozzle.move":
+                return waitForMachineTask(() -> {
+                    Nozzle nozzle = findNozzle(request.nozzle, request.head);
+                    Location target = buildAbsoluteLocation(nozzle, request);
+                    if (Boolean.TRUE.equals(request.safeMove)) {
+                        MovableUtils.moveToLocationAtSafeZ(nozzle, target);
+                    }
+                    else {
+                        nozzle.moveTo(target);
+                    }
+                    nozzle.waitForCompletion(CompletionType.WaitForStillstand);
+                    MovableUtils.fireTargetedUserAction(nozzle);
+                    return nozzleInfo(nozzle);
+                }, false);
             case "actuator.set":
                 return waitForMachineTask(() -> {
                     Actuator actuator = findActuator(request.name);
@@ -269,6 +292,31 @@ public class CodexControlServer implements AutoCloseable {
         throw new IllegalArgumentException("Unknown camera: " + cameraName);
     }
 
+    private Nozzle findNozzle(String nozzleName, String headName) throws Exception {
+        Machine machine = Configuration.get().getMachine();
+        String trimmedNozzleName = nozzleName == null ? "" : nozzleName.trim();
+        if (trimmedNozzleName.isEmpty()) {
+            return findHead(headName).getDefaultNozzle();
+        }
+
+        if (headName != null && !headName.trim().isEmpty()) {
+            Head head = findHead(headName);
+            Nozzle nozzle = head.getNozzleByName(trimmedNozzleName);
+            if (nozzle != null) {
+                return nozzle;
+            }
+            throw new IllegalArgumentException("Unknown nozzle on head " + head.getName() + ": " + nozzleName);
+        }
+
+        for (Head head : machine.getHeads()) {
+            Nozzle nozzle = head.getNozzleByName(trimmedNozzleName);
+            if (nozzle != null) {
+                return nozzle;
+            }
+        }
+        throw new IllegalArgumentException("Unknown nozzle: " + nozzleName);
+    }
+
     private OpenPnpCaptureCamera findCaptureCamera(String cameraName) throws Exception {
         Camera camera = findCamera(cameraName);
         if (!(camera instanceof OpenPnpCaptureCamera)) {
@@ -341,6 +389,16 @@ public class CodexControlServer implements AutoCloseable {
 
     private Location buildAbsoluteLocation(Camera camera, CommandRequest request) {
         Location current = camera.getLocation();
+        double x = request.x != null ? request.x.doubleValue() : current.getX();
+        double y = request.y != null ? request.y.doubleValue() : current.getY();
+        double z = request.z != null ? request.z.doubleValue() : current.getZ();
+        double rotation = request.rotation != null ? request.rotation.doubleValue()
+                : current.getRotation();
+        return new Location(current.getUnits(), x, y, z, rotation);
+    }
+
+    private Location buildAbsoluteLocation(Nozzle nozzle, CommandRequest request) {
+        Location current = nozzle.getLocation();
         double x = request.x != null ? request.x.doubleValue() : current.getX();
         double y = request.y != null ? request.y.doubleValue() : current.getY();
         double z = request.z != null ? request.z.doubleValue() : current.getZ();
@@ -508,6 +566,17 @@ public class CodexControlServer implements AutoCloseable {
         catch (Exception e) {
             info.put("defaultCamera", null);
         }
+        try {
+            info.put("defaultNozzle", head.getDefaultNozzle().getName());
+        }
+        catch (Exception e) {
+            info.put("defaultNozzle", null);
+        }
+        List<Map<String, Object>> nozzles = new ArrayList<>();
+        for (Nozzle nozzle : head.getNozzles()) {
+            nozzles.add(nozzleInfo(nozzle));
+        }
+        info.put("nozzles", nozzles);
         if (head instanceof AbstractHead) {
             AbstractHead abstractHead = (AbstractHead) head;
             info.put("homingFiducial", locationInfo(abstractHead.getHomingFiducialLocation()));
@@ -523,6 +592,16 @@ public class CodexControlServer implements AutoCloseable {
         info.put("looking", camera.getLooking().name());
         info.put("head", camera.getHead() == null ? null : camera.getHead().getName());
         info.put("location", locationInfo(camera.getLocation()));
+        return info;
+    }
+
+    private Map<String, Object> nozzleInfo(Nozzle nozzle) {
+        Map<String, Object> info = new LinkedHashMap<>();
+        info.put("name", nozzle.getName());
+        info.put("head", nozzle.getHead() == null ? null : nozzle.getHead().getName());
+        info.put("location", locationInfo(nozzle.getLocation()));
+        info.put("nozzleTip", nozzle.getNozzleTip() == null ? null : nozzle.getNozzleTip().getName());
+        info.put("part", nozzle.getPart() == null ? null : nozzle.getPart().getName());
         return info;
     }
 
@@ -583,6 +662,7 @@ public class CodexControlServer implements AutoCloseable {
         String command;
         String camera;
         String head;
+        String nozzle;
         String fiducial;
         String property;
         String name;
@@ -595,6 +675,7 @@ public class CodexControlServer implements AutoCloseable {
         Boolean light;
         Boolean auto;
         Boolean save;
+        Boolean safeMove;
         Integer propertyValue;
         JsonElement value;
     }
