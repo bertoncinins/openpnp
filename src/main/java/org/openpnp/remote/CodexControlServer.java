@@ -186,6 +186,21 @@ public class CodexControlServer implements AutoCloseable {
                     actuate(actuator, request);
                     return actuatorInfo(actuator);
                 }, false);
+            case "actuator.read":
+                return waitForMachineTask(() -> {
+                    Actuator actuator = findActuator(request.name);
+                    String value;
+                    if (request.value != null && !request.value.isJsonNull()) {
+                        value = actuator.read(actuatorValue(request.value));
+                    }
+                    else {
+                        value = actuator.read();
+                    }
+                    Map<String, Object> result = actuatorInfo(actuator);
+                    result.put("value", value);
+                    result.put("numericValue", numericValue(value));
+                    return result;
+                }, false);
             case "camera.move":
                 return waitForMachineTask(() -> {
                     Camera camera = findCamera(request.camera);
@@ -385,6 +400,38 @@ public class CodexControlServer implements AutoCloseable {
         }
 
         throw new IllegalArgumentException("Unsupported actuator value type.");
+    }
+
+    private Object actuatorValue(JsonElement value) {
+        if (value == null || value.isJsonNull()) {
+            return null;
+        }
+
+        if (value.isJsonPrimitive()) {
+            if (value.getAsJsonPrimitive().isBoolean()) {
+                return value.getAsBoolean();
+            }
+            if (value.getAsJsonPrimitive().isNumber()) {
+                return value.getAsDouble();
+            }
+            if (value.getAsJsonPrimitive().isString()) {
+                return value.getAsString();
+            }
+        }
+
+        throw new IllegalArgumentException("Unsupported actuator value type.");
+    }
+
+    private Double numericValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Double.valueOf(value.trim());
+        }
+        catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private Location buildAbsoluteLocation(Camera camera, CommandRequest request) {
